@@ -43,6 +43,32 @@ def to_plain_text(raw_evidence: Any) -> str:
 
     # Case 2: Dictionary
     if isinstance(raw_evidence, dict):
+        # Specific handler for Symptom RAG / Vector Agent structured JSON schema
+        if "diagnostic_candidates" in raw_evidence and isinstance(raw_evidence["diagnostic_candidates"], list):
+            qc = raw_evidence.get("query_context", {})
+            symptoms = qc.get("symptoms", [])
+            meds = qc.get("medications", [])
+            cands = raw_evidence.get("diagnostic_candidates", [])
+            limitations = raw_evidence.get("limitations", "")
+
+            lines = []
+            if symptoms:
+                lines.append(f"Presenting Symptoms: {', '.join(symptoms)}")
+            if meds:
+                lines.append(f"Current Patient Medications: {', '.join(meds)}")
+            if cands:
+                lines.append("Diagnostic Candidates:")
+                for c in cands:
+                    if isinstance(c, dict):
+                        cond = c.get("condition", "")
+                        rank = c.get("rank", "")
+                        just = c.get("justification", "")
+                        lines.append(f"  - [Rank {rank}] {cond}: {just}")
+            if limitations:
+                lines.append(f"Clinical Limitations / Alerts: {limitations}")
+
+            return "\n".join(lines)
+
         # Specific handler for Evidence Agent structured JSON schema
         if "evidence" in raw_evidence and isinstance(raw_evidence["evidence"], list):
             hypo = raw_evidence.get("hypothesis", "")

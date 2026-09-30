@@ -4,7 +4,7 @@ FILE 5 of 5: run.py
 WHAT THIS FILE DOES:
 Executes the Clinical Data Fusion & Adaptive Optimizer pipeline.
 
-Outputs a clean, doctor- and patient-focused medical diagnosis and treatment report,
+Outputs a concise, doctor- and patient-focused medical diagnosis and treatment report,
 prefixed by a 1-2 line system status summary at the very top.
 """
 
@@ -25,31 +25,52 @@ from graph import build_pipeline
 
 
 # ============================================================================
-# REALISTIC CLINICAL TEST DATA (MATCHING TEAM AGENT INPUT FORMATS)
+# REALISTIC CLINICAL TEST DATA (EXACT TEAM AGENT OUTPUT SCHEMAS)
 # ============================================================================
 
-# INPUT 1: Symptom RAG / Vector Output (Symptom Normalization & Candidate Table)
-GRAPH_SYMPTOM_RAG_INPUT = """======================================================================
-INPUT SYMPTOMS
-======================================================================
-  - chest pain
-  - sweating
-  - shortness of breath
-
-======================================================================
-NORMALIZED MAPPING APPLIED
-======================================================================
-  'chest pain'                   -> 'Chest pain'  
-  'sweating'                     -> 'Hyperhidrosis'  
-  'shortness of breath'          -> 'Dyspnea'
-
-======================================================================
-TOP CANDIDATE DISEASES (of 347 total)
-======================================================================
- matched   coverage   total_symptoms  disease
-       3      35.0%                9  Myocardial Infarction
-       3      23.1%               13  thymic carcinoma
-       3      17.6%               17  Hodgkins lymphoma"""
+# INPUT 1: Symptom RAG / Vector Database Agent Output (Structured JSON dictionary)
+GRAPH_SYMPTOM_RAG_INPUT = {
+    "agent": "symptom_rag",
+    "status": "success",
+    "query_context": {
+        "diseases": ["Myocardial Infarction"],
+        "symptoms": ["chest pain", "sweating", "shortness of breath"],
+        "medications": ["Sildenafil"],
+        "tests": [],
+        "procedures": []
+    },
+    "diagnostic_candidates": [
+        {
+            "condition": "Myocardial Infarction (Heart Attack)",
+            "rank": 1,
+            "justification": "Evidence 2 explicitly describes classic signs and symptoms of a heart attack as crushing substernal chest pain, shortness of breath, and sweating, directly matching the patient's presentation.",
+            "supporting_evidence": [2, 5]
+        },
+        {
+            "condition": "Heart Arrhythmia",
+            "rank": 2,
+            "justification": "Evidence 1 identifies chest pain or discomfort and shortness of breath as potential symptoms of heart arrhythmias.",
+            "supporting_evidence": [1]
+        },
+        {
+            "condition": "Valvular Heart Disease",
+            "rank": 3,
+            "justification": "Evidence 4 notes that valvular heart disease can present with symptoms including chest pain and shortness of breath.",
+            "supporting_evidence": [4]
+        }
+    ],
+    "evidence": [
+        {
+            "content": "Classic signs and symptoms of a heart attack include crushing, substernal chest pain, pain in your shoulders or arms, shortness of breath, and sweating.",
+            "source": "symptom-disease-train-dataset.csv",
+            "source_type": "symptom-disease-dataset",
+            "relevance_score": 0.5996
+        }
+    ],
+    "metadata": {"evidence_count": 5},
+    "limitations": "The retrieved passages do not contain information regarding the clinical risks or drug interactions associated with Sildenafil in a patient presenting with myocardial infarction.",
+    "error": None
+}
 
 # INPUT 2: Evidence Agent Output (Structured JSON schema with hypothesis & evidence array)
 EVIDENCE_AGENT_INPUT = {
@@ -80,24 +101,24 @@ GRAPH_EVIDENCE_INPUT = {
     "summary": (
         "Knowledge Graph Traversal: Patient presents with acute Chest Pain, Hyperhidrosis, and Dyspnea. "
         "Primary relational entity: Myocardial Infarction / Acute Coronary Syndrome. "
-        "Recommended acute pharmacotherapy: Dual antiplatelet therapy (Aspirin + P2Y12 inhibitor), "
-        "Sublingual Nitroglycerin, and Unfractionated Heparin."
+        "Critical Medication Alert: Patient is currently taking Sildenafil. "
+        "Severe Contraindication: Concomitant administration of Nitrates (e.g. Sublingual Nitroglycerin) with Sildenafil is strictly contra-indicated due to risk of fatal refractory hypotension."
     ),
     "relations": [
         "Patient -> presents_with -> Chest Pain (angina)",
         "Patient -> presents_with -> Hyperhidrosis (sweating)",
         "Patient -> presents_with -> Dyspnea (shortness of breath)",
-        "Myocardial Infarction -> first_line_medication -> Aspirin 325mg + Clopidogrel 300mg",
-        "Myocardial Infarction -> contraindicates -> NSAID monotherapy without gastroprotection"
+        "Patient -> current_medication -> Sildenafil",
+        "Sildenafil -> severe_contraindication -> Nitroglycerin (fatal hypotension risk)"
     ],
-    "structural_confidence": 0.94
+    "structural_confidence": 0.95
 }
 
 # INPUT 4: Literature Evidence on Graph Findings
 GRAPH_WEB_EVIDENCE_INPUT = (
-    "ACC/AHA & ESC Clinical Guidelines: Prompt administration of chewing aspirin (162-325 mg) "
-    "and P2Y12 inhibitor upon presentation with suspected acute coronary syndrome significantly reduces mortality. "
-    "Immediate emergency ECG and troponin diagnostic confirmation mandated."
+    "FDA Drug Safety Warning & AHA Guidelines: Co-administration of PDE5 inhibitors (Sildenafil) "
+    "with organic nitrates (Nitroglycerin) produces severe, life-threatening hypotension. "
+    "Nitrates must not be administered within 24 hours of Sildenafil use."
 )
 
 
