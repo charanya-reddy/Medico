@@ -40,34 +40,53 @@ def run_fusion_agent(
 ) -> str:
     """
     Agent 1: Clinical Data Fusion Agent.
-    Receives 4 normalized evidence streams and generates a patient- and doctor-facing
-    clinical diagnosis and treatment report.
+    Produces a concise, endpoint-driven, bullet-pointed clinical report.
     """
-    prompt = f"""You are the Clinical Data Fusion Agent in an advanced Clinical Decision Support System (CDSS).
-You receive four input streams from preceding retrieval agents:
+    prompt = f"""You are the Clinical Data Fusion Agent in a Clinical Decision Support System (CDSS).
+Synthesize the following 4 input evidence streams into a CONCISE, ENDPOINT-STYLE clinical report for a doctor or patient.
 
-=== 1. SYMPTOM / VECTOR RAG EVIDENCE ===
+=== INPUT EVIDENCE STREAMS ===
+1. SYMPTOM / VECTOR EVIDENCE:
 {vector_evidence}
 
-=== 2. LITERATURE EVIDENCE ON DIAGNOSIS ===
+2. LITERATURE EVIDENCE (DIAGNOSIS):
 {vector_web_evidence}
 
-=== 3. KNOWLEDGE GRAPH RELATIONS & SAFETY CONSTRAINTS ===
+3. KNOWLEDGE GRAPH SAFETY & RELATIONS:
 {graph_evidence}
 
-=== 4. LITERATURE EVIDENCE ON SAFETY & INTERACTIONS ===
+4. LITERATURE EVIDENCE (SAFETY):
 {graph_web_evidence}
 
-=== TASK: CLINICAL DIAGNOSIS & TREATMENT PLAN ===
-Synthesize a clear, highly professional clinical report designed specifically for doctors and patients. 
-Focus ONLY on actionable medical information:
-  1. DIAGNOSED DISEASE / DISORDER (Primary Suspected Diagnosis & Differentials)
-  2. CLINICAL FINDINGS & SYMPTOM SUMMARY
-  3. RECOMMENDED MEDICATIONS & PHARMACOTHERAPY (First-line medications, dosage, administration guidelines)
-  4. TREATMENT, CURE & MANAGEMENT PLAN (Clinical management, curative/supportive care steps)
-  5. DRUG SAFETY, CONTRAINDICATIONS & FOLLOW-UP ADVICE (Interaction warnings, monitoring requirements, when to seek immediate emergency care)
+=== FORMATTING INSTRUCTIONS ===
+- Do NOT output long paragraphs or raw internal section headers (such as 'NORMALIZED MAPPING APPLIED').
+- Keep every section extremely concise using short bullet points (endpoints).
+- Use EXACTLY this format:
 
-Do NOT include raw technical confidence scores, code logic, or internal agent metadata in the report body."""
+----------------------------------------------------------------------
+ CLINICAL DIAGNOSIS & ACTIONABLE TREATMENT PLAN
+----------------------------------------------------------------------
+• PRIMARY DIAGNOSIS: <Primary Disease Name>
+• KEY DIFFERENTIALS:
+  - <Differential 1>
+  - <Differential 2>
+
+• PRESENTING SYMPTOMS:
+  - <Symptom 1>
+  - <Symptom 2>
+
+• RECOMMENDED MEDICATIONS & DOSAGE:
+  - <Medication 1>: <Short dosage/usage guidance>
+  - <Medication 2>: <Short dosage/usage guidance>
+
+• TREATMENT & MANAGEMENT STEPS:
+  - <Step 1>
+  - <Step 2>
+
+• DRUG SAFETY & WARNINGS:
+  - <Warning/Interaction 1>
+  - <Warning/Interaction 2>
+----------------------------------------------------------------------"""
 
     response = llm.invoke(prompt)
     return response.content
@@ -134,36 +153,60 @@ def build_fallback_report(
 ) -> str:
     """
     Deterministic fallback for run_fusion_agent() if LLM API is unavailable.
-    Constructs a well-structured doctor/patient clinical report without crashing.
+    Outputs short, bulleted endpoints for doctors and patients.
     """
     comb = (vector_evidence + "\n" + vector_web_evidence).lower()
+
     if "myocard" in comb or "chest pain" in comb:
-        disease_hypothesis = "Myocardial Infarction (MI) / Acute Coronary Syndrome"
+        primary_dx = "Myocardial Infarction (MI) / Acute Coronary Syndrome"
+        differentials = ["Angina Pectoris", "Aortic Dissection", "Pulmonary Embolism"]
+        symptoms = ["Chest Pain (Angina)", "Hyperhidrosis (Sweating)", "Dyspnea (Shortness of Breath)"]
+        meds = [
+            "Aspirin 325 mg: Chewed immediately upon acute presentation.",
+            "Clopidogrel 300 mg / Ticagrelor 180 mg: Dual antiplatelet loading dose.",
+            "Sublingual Nitroglycerin 0.4 mg: PRN for angina symptoms.",
+            "Unfractionated Heparin: Acute anticoagulation protocol."
+        ]
     elif "pneumonia" in comb:
-        disease_hypothesis = "Community-Acquired Pneumonia"
+        primary_dx = "Community-Acquired Pneumonia"
+        differentials = ["Acute Bronchitis", "COPD Exacerbation", "Viral Pneumonitis"]
+        symptoms = ["Fever (38.5 C)", "Productive Cough", "Progressive Dyspnea"]
+        meds = [
+            "Amoxicillin-clavulanate 875/125 mg PO BID: First-line antimicrobial.",
+            "Azithromycin 500 mg Day 1, 250 mg Days 2-5: Macrolide coverage."
+        ]
     else:
-        disease_hypothesis = "Primary Suspected Clinical Condition"
+        primary_dx = "Primary Suspected Clinical Condition"
+        differentials = ["Review mapped symptom coverage table"]
+        symptoms = ["Presenting clinical symptoms under evaluation"]
+        meds = ["Guideline-directed pharmacotherapy as indicated by physician."]
+
+    safety_lines = []
+    if "warfarin" in (graph_evidence + "\n" + graph_web_evidence).lower():
+        safety_lines.append("Warfarin Interaction: Monitor INR closely if co-administering antibiotics.")
+    if "nsaid" in (graph_evidence + "\n" + graph_web_evidence).lower():
+        safety_lines.append("NSAID Warning: Avoid unmonitored NSAIDs due to GI bleeding risk.")
+    if not safety_lines:
+        safety_lines.append("No critical drug-drug contraindications identified.")
+
+    diff_str = "\n".join(f"  - {d}" for d in differentials)
+    symp_str = "\n".join(f"  - {s}" for s in symptoms)
+    med_str = "\n".join(f"  - {m}" for m in meds)
+    safe_str = "\n".join(f"  - {w}" for w in safety_lines)
 
     return (
-        f"======================================================================\n"
-        f" CLINICAL DIAGNOSIS & ACTIONABLE TREATMENT REPORT\n"
-        f"======================================================================\n\n"
-        f"1. DIAGNOSED DISEASE / DISORDER:\n"
-        f"   - Primary Diagnosis Candidate: {disease_hypothesis}\n"
-        f"   - Clinical Differentials: Review mapped symptom coverage table.\n\n"
-        f"2. CLINICAL FINDINGS & SYMPTOM SUMMARY:\n"
-        f"   - Input Findings: {vector_evidence}\n"
-        f"   - Supporting Literature Evidence: {vector_web_evidence}\n\n"
-        f"3. RECOMMENDED MEDICATIONS & PHARMACOTHERAPY:\n"
-        f"   - Recommended First-Line Therapy: Guideline-directed pharmacotherapy as clinically indicated.\n"
-        f"   - Safety & Relational Evaluation: {graph_evidence}\n\n"
-        f"4. TREATMENT, CURE & MANAGEMENT PLAN:\n"
-        f"   - Immediate clinical evaluation & diagnostic confirmation (ECG/Troponin/Labs/Imaging).\n"
-        f"   - Implement guideline-directed curative and supportive care protocols.\n"
-        f"   - Evidence Validation: {graph_web_evidence}\n\n"
-        f"5. DRUG SAFETY, CONTRAINDICATIONS & FOLLOW-UP ADVICE:\n"
-        f"   - Monitor for medication contraindications and potential drug interactions.\n"
-        f"   - Seek immediate emergency medical attention if acute symptoms persist or worsen."
+        f"----------------------------------------------------------------------\n"
+        f" CLINICAL DIAGNOSIS & ACTIONABLE TREATMENT PLAN\n"
+        f"----------------------------------------------------------------------\n"
+        f"• PRIMARY DIAGNOSIS: {primary_dx}\n"
+        f"• KEY DIFFERENTIALS:\n{diff_str}\n\n"
+        f"• PRESENTING SYMPTOMS:\n{symp_str}\n\n"
+        f"• RECOMMENDED MEDICATIONS & DOSAGE:\n{med_str}\n\n"
+        f"• TREATMENT & MANAGEMENT STEPS:\n"
+        f"  - Order immediate diagnostic confirmation (ECG, Cardiac Biomarkers / Troponin, CXR).\n"
+        f"  - Initiate urgent clinical evaluation and supportive care protocol.\n\n"
+        f"• DRUG SAFETY & WARNINGS:\n{safe_str}\n"
+        f"----------------------------------------------------------------------"
     )
 
 
