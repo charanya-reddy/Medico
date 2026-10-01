@@ -1,0 +1,29 @@
+{
+  "confidence": {
+    "confidence_1": {
+      "score": 0.6,
+      "similarity_score": 0.5996,
+      "web_evidence_score": 0.5,
+      "concordance_score": 0.7,
+      "passes_threshold": false,
+      "threshold": 0.65
+    },
+    "confidence_2": {
+      "score": 0.89,
+      "graph_score": 0.9,
+      "web_evidence_score": 0.9,
+      "concordance_score": 0.7
+    },
+    "fusion": {
+      "final_fused_score": 0.81,
+      "c1_score": 0.6,
+      "c2_score": 0.89,
+      "formula": "C_final = 0.45*C1 + 0.55*C2 + Delta_agreement",
+      "agreement_adjustment": 0.05,
+      "inter_stream_status": "Mutually Concordant"
+    },
+    "passes_threshold": false
+  },
+  "fusion_report": "----------------------------------------------------------------------\n CLINICAL DIAGNOSIS & ACTIONABLE TREATMENT PLAN\n----------------------------------------------------------------------\n• PRIMARY DIAGNOSIS: Myocardial Infarction (MI) / Acute Coronary Syndrome\n• DRUG SAFETY & GRAPH CONTRAINDICATION ALERTS:\n  - [Knowledge Graph Alert]: Sildenafil identified in patient record — Nitrate co-administration is STRICTLY CONTRA-INDICATED due to risk of severe refractory hypotension.\n----------------------------------------------------------------------",
+  "optimizer_response": "RE-QUERY (Attempt 1): Confidence Score 1 (0.6) is below threshold (0.65). Optimization directives: Activate medical term boosting, expand BioBERT embedding radius, and initiate targeted PubMed queries."
+}

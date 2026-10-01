@@ -124,11 +124,14 @@ The Optimizer Agent enforces the following decision logic:
 ├── evidence_adapter.py    # Adapter layer: converts ANY shape (str, dict, list) from upstream into clean text
 ├── confidence_scoring.py  # Pure math: computes C1, C2, and dual-stream evidential fusion
 ├── agents.py              # LLM agents: Fusion Agent synthesis and Optimizer Agent feedback & fallbacks
-├── graph.py               # LangGraph wiring: 5 nodes, state definition, and C1 conditional re-query loop
+├── graph.py               # LangGraph wiring: 2 nodes (fusion + optimizer), state definition, conditional router
 ├── run.py                 # Main execution script with test cases
 ├── test_pipeline.py       # Unit test suite covering adapter, confidence scoring, and graph
-├── requirements.txt       # Dependencies: langgraph, langchain-openai, python-dotenv
-└── .env.example           # Environment template for OPENROUTER_API_KEY
+├── requirements.txt       # Dependencies with pinned versions
+├── example_input.json     # Example 4-stream input for the pipeline
+├── example_output.json    # Example pipeline output (confidence + report + optimizer response)
+├── .env.example           # Environment template for OPENROUTER_API_KEY
+└── .gitignore
 ```
 
 ---

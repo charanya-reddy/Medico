@@ -53,9 +53,9 @@ def to_plain_text(raw_evidence: Any) -> str:
 
             lines = []
             if symptoms:
-                lines.append(f"Presenting Symptoms: {', '.join(symptoms)}")
+                lines.append(f"Presenting Symptoms: {', '.join(str(s) for s in symptoms)}")
             if meds:
-                lines.append(f"Current Patient Medications: {', '.join(meds)}")
+                lines.append(f"Current Patient Medications: {', '.join(str(m) for m in meds)}")
             if cands:
                 lines.append("Diagnostic Candidates:")
                 for c in cands:
@@ -64,13 +64,28 @@ def to_plain_text(raw_evidence: Any) -> str:
                         rank = c.get("rank", "")
                         just = c.get("justification", "")
                         lines.append(f"  - [Rank {rank}] {cond}: {just}")
+
+            # Include raw evidence items with relevance_score so downstream
+            # confidence scoring can extract the actual RAG similarity value
+            raw_evidence_items = raw_evidence.get("evidence", [])
+            if raw_evidence_items:
+                for ev in raw_evidence_items:
+                    if isinstance(ev, dict):
+                        rel = ev.get("relevance_score", "")
+                        src = ev.get("source", "")
+                        content = ev.get("content", "")
+                        if rel != "":
+                            lines.append(f"  - relevance_score: {rel} (Source: {src}) {content}")
+                        elif content:
+                            lines.append(f"  - Evidence: {content} (Source: {src})")
+
             if limitations:
                 lines.append(f"Clinical Limitations / Alerts: {limitations}")
 
             return "\n".join(lines)
 
         # Specific handler for Evidence Agent structured JSON schema
-        if "evidence" in raw_evidence and isinstance(raw_evidence["evidence"], list):
+        if "evidence" in raw_evidence and isinstance(raw_evidence["evidence"], list) and "hypothesis" in raw_evidence:
             hypo = raw_evidence.get("hypothesis", "")
             lines = [f"Hypothesis Investigated: {hypo}"] if hypo else []
             for idx, item in enumerate(raw_evidence["evidence"], 1):
@@ -85,21 +100,30 @@ def to_plain_text(raw_evidence: Any) -> str:
                     lines.append(f"- {to_plain_text(item)}")
             return "\n\n".join(lines)
 
-        # Look for standard keys holding textual descriptions
-        for key in ("text", "summary", "content", "answer", "result", "findings", "diagnosis", "output"):
-            if key in raw_evidence and raw_evidence[key]:
-                return to_plain_text(raw_evidence[key])
+        # General / Knowledge Graph Dictionary Handler: Aggregate ALL safety & relational keys
+        parts = []
 
-        # If it's a structured graph dictionary with a list of relations or entities
-        if "relations" in raw_evidence and isinstance(raw_evidence["relations"], list):
-            rel_lines = [f"- {to_plain_text(r)}" for r in raw_evidence["relations"]]
-            base_summary = raw_evidence.get("summary", "")
-            if base_summary:
-                return f"{base_summary}\nRelations:\n" + "\n".join(rel_lines)
-            return "Knowledge Graph Relations:\n" + "\n".join(rel_lines)
+        # 1. Summary / Text / Findings
+        for sum_key in ("summary", "text", "content", "findings", "diagnosis", "output"):
+            if sum_key in raw_evidence and raw_evidence[sum_key]:
+                val_text = to_plain_text(raw_evidence[sum_key])
+                if val_text and val_text != "No evidence provided.":
+                    parts.append(f"Summary: {val_text}")
 
-        # Fallback: readable key-value dump so no information is lost
-        kv_pairs = [f"{k}: {to_plain_text(v)}" for k, v in raw_evidence.items() if v]
+        # 2. Relations / Entities
+        if "relations" in raw_evidence and raw_evidence["relations"]:
+            parts.append("Knowledge Graph Relations:\n" + to_plain_text(raw_evidence["relations"]))
+
+        # 3. Critical Safety Fields: Contraindications, Warnings, Interactions, Alerts
+        for safety_key in ("contraindications", "warnings", "interactions", "alerts", "safety", "medications", "details"):
+            if safety_key in raw_evidence and raw_evidence[safety_key]:
+                parts.append(f"{safety_key.capitalize()}:\n" + to_plain_text(raw_evidence[safety_key]))
+
+        if parts:
+            return "\n\n".join(parts)
+
+        # Fallback: readable dump of all key-value pairs so no information is ever lost
+        kv_pairs = [f"{k}: {to_plain_text(v)}" for k, v in raw_evidence.items() if v is not None and v != ""]
         return "\n".join(kv_pairs)
 
     # Case 3: List

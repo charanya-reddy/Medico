@@ -22,7 +22,8 @@ class TestEvidenceAdapter(unittest.TestCase):
 
     def test_dict_input(self):
         data = {"summary": "Patient has AFib", "score": 0.9}
-        self.assertEqual(to_plain_text(data), "Patient has AFib")
+        result = to_plain_text(data)
+        self.assertIn("Patient has AFib", result)
 
     def test_list_input(self):
         data = ["Guideline A", "Trial B"]
@@ -34,6 +35,24 @@ class TestEvidenceAdapter(unittest.TestCase):
         self.assertEqual(to_plain_text(None), "No evidence provided.")
         self.assertEqual(to_plain_text(""), "No evidence provided.")
 
+    def test_kg_safety_data_preserved(self):
+        """Regression test: KG safety fields must NOT be dropped."""
+        data = {
+            "summary": "Patient presents with MI. Sildenafil in record.",
+            "relations": [
+                "Patient -> current_medication -> Sildenafil",
+                "Sildenafil -> severe_contraindication -> Nitroglycerin",
+            ],
+            "contraindications": "Nitrate co-administration with Sildenafil is strictly contra-indicated.",
+            "warnings": "Risk of fatal refractory hypotension.",
+        }
+        result = to_plain_text(data)
+        self.assertIn("Sildenafil", result)
+        self.assertIn("Nitroglycerin", result)
+        self.assertIn("contra-indicated", result)
+        self.assertIn("hypotension", result)
+        self.assertIn("Knowledge Graph Relations", result)
+
     def test_normalize_all_4_inputs(self):
         res = normalize_all(
             vector_evidence="Vector text",
@@ -43,7 +62,7 @@ class TestEvidenceAdapter(unittest.TestCase):
         )
         self.assertEqual(res["vector_evidence"], "Vector text")
         self.assertIn("Guideline 1", res["vector_web_evidence"])
-        self.assertEqual(res["graph_evidence"], "Graph text")
+        self.assertIn("Graph text", res["graph_evidence"])
         self.assertEqual(res["graph_web_evidence"], "FDA text")
 
 

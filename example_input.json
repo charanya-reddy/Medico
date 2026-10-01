@@ -1,0 +1,53 @@
+{
+  "raw_vector_evidence": {
+    "agent": "symptom_rag",
+    "status": "success",
+    "query_context": {
+      "diseases": ["Myocardial Infarction"],
+      "symptoms": ["chest pain", "sweating", "shortness of breath"],
+      "medications": ["Sildenafil"]
+    },
+    "diagnostic_candidates": [
+      {
+        "condition": "Myocardial Infarction (Heart Attack)",
+        "rank": 1,
+        "justification": "Classic signs: crushing substernal chest pain, shortness of breath, sweating."
+      },
+      {
+        "condition": "Heart Arrhythmia",
+        "rank": 2,
+        "justification": "Chest pain and shortness of breath overlap with arrhythmia presentation."
+      }
+    ],
+    "evidence": [
+      {
+        "content": "Classic signs and symptoms of a heart attack include crushing, substernal chest pain, shortness of breath, and sweating.",
+        "source": "symptom-disease-train-dataset.csv",
+        "relevance_score": 0.5996
+      }
+    ],
+    "limitations": "No information on Sildenafil drug interactions."
+  },
+  "raw_vector_web_evidence": {
+    "hypothesis": "myocardial infarction",
+    "evidence": [
+      {
+        "tier_label": "Systematic Review / Meta-Analysis",
+        "score": 100.0,
+        "title": "Meta-analysis of myocardial infarction outcomes.",
+        "summary": "Systematic review comparing MI with non-obstructive vs obstructive coronary arteries.",
+        "source": "PubMed"
+      }
+    ]
+  },
+  "raw_graph_evidence": {
+    "summary": "Patient presents with acute Chest Pain, Hyperhidrosis, and Dyspnea. Critical: Sildenafil + Nitrate is contra-indicated.",
+    "relations": [
+      "Patient -> presents_with -> Chest Pain",
+      "Patient -> current_medication -> Sildenafil",
+      "Sildenafil -> severe_contraindication -> Nitroglycerin (fatal hypotension risk)"
+    ]
+  },
+  "raw_graph_web_evidence": "FDA Drug Safety Warning: Co-administration of PDE5 inhibitors (Sildenafil) with organic nitrates produces severe, life-threatening hypotension.",
+  "attempt": 1
+}

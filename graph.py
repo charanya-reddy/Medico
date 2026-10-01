@@ -18,6 +18,7 @@ Architecture:
                                        >= 0.65 stops at END).
 """
 
+import sys
 from typing import TypedDict, Any, Dict
 from langgraph.graph import StateGraph, END
 
@@ -92,7 +93,7 @@ def fusion_node(state: PipelineState) -> Dict[str, Any]:
         graph_web_evidence=graph_web,
     )
 
-    # Step 3: LLM multi-source synthesis report (with deterministic fallback)
+    # Step 3: LLM multi-source synthesis report (with error logging fallback)
     try:
         report = run_fusion_agent(
             vector_evidence=vec,
@@ -101,6 +102,7 @@ def fusion_node(state: PipelineState) -> Dict[str, Any]:
             graph_web_evidence=graph_web,
         )
     except Exception as error:
+        sys.stderr.write(f"[LLM WARNING / ERROR] Fusion Agent AI call failed ({error}). Using deterministic fallback synthesis.\n")
         report = build_fallback_report(vec, vec_web, graph, graph_web)
 
     return {
@@ -130,6 +132,7 @@ def optimizer_node(state: PipelineState) -> Dict[str, Any]:
     try:
         response = run_optimizer_agent(fusion_report, confidence)
     except Exception as error:
+        sys.stderr.write(f"[LLM WARNING / ERROR] Optimizer Agent AI call failed ({error}). Using deterministic fallback response.\n")
         response = build_fallback_optimizer(confidence, attempt)
 
     return {
@@ -139,16 +142,14 @@ def optimizer_node(state: PipelineState) -> Dict[str, Any]:
 
 
 # ============================================================================
-# CONDITIONAL EDGE ROUTER
+# CONDITIONAL EDGE ROUTER (FOR INTEGRATION WITH MASTER PIPELINE)
 # ============================================================================
 def optimizer_router(state: PipelineState) -> str:
     """
-    Conditional routing logic:
-      - Evaluates ONLY Confidence Score 1 (Vector track).
-      - If C1 >= 0.65 -> STOP (approved).
-      - If C1 < 0.65 and attempt <= MAX_ITERATIONS -> RETRY (loops back).
-      - If attempt > MAX_ITERATIONS -> STOP (max cycles reached).
-      - Confidence Score 2 is NOT gating.
+    Conditional routing helper for master LangGraph controller:
+      - Evaluates Confidence Score 1 (Vector track threshold tau = 0.65).
+      - Returns "stop" if C1 >= 0.65 or max iterations reached.
+      - Returns "retry" if C1 < 0.65 (so master LangGraph can route back to Vector RAG).
     """
     c1_passed = state["confidence"]["confidence_1"]["passes_threshold"]
     current_attempt = state.get("attempt", 1)
@@ -164,8 +165,8 @@ def optimizer_router(state: PipelineState) -> str:
 # ============================================================================
 def build_pipeline():
     """
-    Builds the 2-node LangGraph pipeline:
-        fusion_node -> optimizer_node -> (conditional edge: stop or retry)
+    Builds the clean 2-node LangGraph pipeline:
+        fusion_node -> optimizer_node -> END
     """
     graph = StateGraph(PipelineState)
 
@@ -173,15 +174,9 @@ def build_pipeline():
     graph.add_node("fusion_node", fusion_node)
     graph.add_node("optimizer_node", optimizer_node)
 
-    # 2. Connect the nodes
+    # 2. Connect the nodes cleanly to END (no internal loop)
     graph.set_entry_point("fusion_node")
     graph.add_edge("fusion_node", "optimizer_node")
-
-    # 3. Add conditional loop edge gating on Confidence 1
-    graph.add_conditional_edges(
-        "optimizer_node",
-        optimizer_router,
-        {"stop": END, "retry": "fusion_node"},
-    )
+    graph.add_edge("optimizer_node", END)
 
     return graph.compile()

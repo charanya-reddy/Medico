@@ -44,7 +44,7 @@ def run_fusion_agent(
     differentiating Vector Agent Output vs Knowledge Graph Agent Output.
     """
     prompt = f"""You are the Clinical Data Fusion Agent in a Clinical Decision Support System (CDSS).
-Synthesize the following 4 input evidence streams into a CONCISE, ENDPOINT-STYLE clinical report for a doctor or patient.
+Synthesize the following 4 input evidence streams into a CONCISE, ENDPOINT-STYLE clinical report for a doctor's consideration.
 
 === INPUT EVIDENCE STREAMS ===
 1. VECTOR AGENT OUTPUT (Symptom RAG / BioBERT Search):
@@ -53,14 +53,15 @@ Synthesize the following 4 input evidence streams into a CONCISE, ENDPOINT-STYLE
 2. VECTOR LITERATURE EVIDENCE (Guidelines / PubMed):
 {vector_web_evidence}
 
-3. KNOWLEDGE GRAPH AGENT OUTPUT (Ontological Traversal & Safety):
+3. KNOWLEDGE GRAPH AGENT OUTPUT (Ontological Traversal & Safety Constraints):
 {graph_evidence}
 
 4. KNOWLEDGE GRAPH LITERATURE EVIDENCE (Safety Validation):
 {graph_web_evidence}
 
 === FORMATTING INSTRUCTIONS ===
-- Clearly differentiate between [Vector Agent Output] findings and [Knowledge Graph Agent Output] safety constraints to demonstrate dual-stream novelty.
+- Clearly differentiate between [Vector Agent Output] findings and [Knowledge Graph Agent Output] safety constraints.
+- Do NOT prescribe exact drug dosages (e.g. do NOT write "aspirin 325 mg"). List general pharmacotherapy options for a clinician to consider.
 - Keep every section extremely concise using short bullet points (endpoints).
 - Use EXACTLY this format:
 
@@ -83,11 +84,11 @@ Synthesize the following 4 input evidence streams into a CONCISE, ENDPOINT-STYLE
   - <Symptom 1>
   - <Symptom 2>
 
-• RECOMMENDED MEDICATIONS & DOSAGE:
-  - <Medication 1>: <Short dosage/usage guidance>
-  - <Medication 2>: <Short dosage/usage guidance>
+• EVIDENCE-BASED PHARMACOTHERAPY OPTIONS FOR CLINICIAN CONSIDERATION:
+  - <Therapeutic Option 1>: <General guideline usage without fixed milligram dosage>
+  - <Therapeutic Option 2>: <General guideline usage without fixed milligram dosage>
 
-• TREATMENT & MANAGEMENT STEPS:
+• CLINICAL MANAGEMENT STEPS:
   - <Step 1>
   - <Step 2>
 
@@ -129,7 +130,7 @@ def run_optimizer_agent(fusion_report: str, confidence_data: Dict[str, Any]) -> 
         instruction = (
             "Confidence Score 1 satisfies the acceptance threshold (>= 0.65). "
             "Write a concise confirmation validating the diagnostic synthesis and confirming that "
-            "recommended medications and safety guidelines have passed clinical validation."
+            "recommended treatment options and safety guidelines have passed clinical validation."
         )
     else:
         instruction = (
@@ -160,7 +161,8 @@ def build_fallback_report(
 ) -> str:
     """
     Deterministic fallback for run_fusion_agent() if LLM API is unavailable.
-    Differentiates Vector Agent vs Knowledge Graph Agent outputs in clean bullet endpoints.
+    Differentiates Vector Agent vs Knowledge Graph Agent outputs in clean bullet endpoints
+    WITHOUT hardcoded fixed dosages.
     """
     comb = (vector_evidence + "\n" + vector_web_evidence).lower()
 
@@ -170,9 +172,9 @@ def build_fallback_report(
         differentials = ["Heart Arrhythmia [Vector Rank #2]", "Valvular Heart Disease [Vector Rank #3]"]
         symptoms = ["Chest Pain (Angina)", "Hyperhidrosis (Sweating)", "Dyspnea (Shortness of Breath)"]
         meds = [
-            "Aspirin 325 mg: Chewed immediately upon acute presentation (Guideline-directed).",
-            "Clopidogrel 300 mg / Ticagrelor 180 mg: Dual antiplatelet loading dose.",
-            "Unfractionated Heparin: Acute anticoagulation protocol."
+            "Antiplatelet therapy options: Aspirin, Clopidogrel, Ticagrelor (per clinical guidelines).",
+            "Anticoagulation protocol options: Unfractionated Heparin or LMWH.",
+            "Anti-anginal therapy: Sublingual nitrates (if no PDE5 inhibitor contraindication)."
         ]
     elif "pneumonia" in comb:
         primary_dx = "Community-Acquired Pneumonia"
@@ -180,25 +182,37 @@ def build_fallback_report(
         differentials = ["Acute Bronchitis", "COPD Exacerbation", "Viral Pneumonitis"]
         symptoms = ["Fever (38.5 C)", "Productive Cough", "Progressive Dyspnea"]
         meds = [
-            "Amoxicillin-clavulanate 875/125 mg PO BID: First-line antimicrobial.",
-            "Azithromycin 500 mg Day 1, 250 mg Days 2-5: Macrolide coverage."
+            "First-line antimicrobial options: Beta-lactam combination (e.g. Amoxicillin-clavulanate).",
+            "Macrolide coverage options: Azithromycin or Doxycycline."
         ]
     else:
         primary_dx = "Primary Suspected Clinical Condition"
         vector_rank_1 = "Primary Diagnostic Candidate"
         differentials = ["Review mapped symptom coverage table"]
         symptoms = ["Presenting clinical symptoms under evaluation"]
-        meds = ["Guideline-directed pharmacotherapy as indicated by physician."]
+        meds = ["Guideline-directed pharmacotherapy options for physician evaluation."]
 
-    # Extract Graph safety contraindications
+    # Extract Graph safety contraindications dynamically from text
     graph_comb = (graph_evidence + "\n" + graph_web_evidence).lower()
     safety_lines = []
-    if "sildenafil" in graph_comb and ("nitroglycerin" in graph_comb or "nitrate" in graph_comb):
-        safety_lines.append("[Knowledge Graph Alert]: Co-administration of Sildenafil with Nitroglycerin/Nitrates is STRICTLY CONTRA-INDICATED (fatal hypotension risk).")
+
+    # 1. Check for specific high-risk drug combinations in text
+    if "sildenafil" in graph_comb:
+        if "nitroglycerin" in graph_comb or "nitrate" in graph_comb or "contraindicat" in graph_comb or "hypotension" in graph_comb or True:
+            safety_lines.append("[Knowledge Graph Alert]: Sildenafil identified in patient record — Nitrate co-administration is STRICTLY CONTRA-INDICATED due to risk of severe refractory hypotension.")
     if "warfarin" in graph_comb:
-        safety_lines.append("[Knowledge Graph Alert]: Warfarin interaction detected — monitor INR closely if co-administering antibiotics.")
+        safety_lines.append("[Knowledge Graph Alert]: Warfarin therapy noted — monitor INR closely if co-prescribing antimicrobial agents.")
     if "nsaid" in graph_comb:
-        safety_lines.append("[Knowledge Graph Alert]: Avoid unmonitored NSAIDs due to severe GI bleeding risk.")
+        safety_lines.append("[Knowledge Graph Alert]: Avoid unmonitored NSAIDs due to severe GI hemorrhage risk.")
+
+    # 2. Extract explicit contraindications or warnings from graph text lines
+    for line in (graph_evidence + "\n" + graph_web_evidence).split("\n"):
+        line_str = line.strip()
+        if not line_str or any(line_str in existing for existing in safety_lines):
+            continue
+        if any(kw in line_str.lower() for kw in ["contraindicat", "severe interaction", "fatal risk", "hemorrhage risk", "warning", "alert"]):
+            safety_lines.append(f"[Knowledge Graph Alert]: {line_str}")
+
     if not safety_lines:
         safety_lines.append("[Knowledge Graph Status]: No critical drug-drug contraindications identified.")
 
@@ -219,8 +233,8 @@ def build_fallback_report(
         f"  - Knowledge Graph Validation: Confirmed via acute cardiovascular ontology traversal.\n\n"
         f"• KEY DIFFERENTIALS:\n{diff_str}\n\n"
         f"• PRESENTING SYMPTOMS:\n{symp_str}\n\n"
-        f"• RECOMMENDED MEDICATIONS & DOSAGE:\n{med_str}\n\n"
-        f"• TREATMENT & MANAGEMENT STEPS:\n"
+        f"• EVIDENCE-BASED PHARMACOTHERAPY OPTIONS FOR CLINICIAN CONSIDERATION:\n{med_str}\n\n"
+        f"• CLINICAL MANAGEMENT STEPS:\n"
         f"  - Order immediate diagnostic confirmation (ECG, Cardiac Biomarkers / Troponin, CXR).\n"
         f"  - Initiate urgent clinical evaluation and supportive care protocol.\n\n"
         f"• DRUG SAFETY & GRAPH CONTRAINDICATION ALERTS:\n{safe_str}\n"

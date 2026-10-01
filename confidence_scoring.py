@@ -60,8 +60,8 @@ def extract_similarity_score(vector_text: str) -> float:
          Derives an objective clinical retrieval quality score (0.0 to 1.0) by analyzing
          semantic completeness, symptoms, mapped terms, and disease specificity.
     """
-    # Case 1: Explicit similarity or score decimal provided (e.g., similarity 0.88)
-    match_dec = re.search(r"(?:similarity|score|relevance)[:\s]+([01](?:\.\d+)?)", vector_text, re.IGNORECASE)
+    # Case 1: Explicit RAG similarity or relevance score provided (e.g. relevance_score: 0.5996 or similarity: 0.88)
+    match_dec = re.search(r"(?:relevance_score|similarity_score|cosine_similarity|relevance|similarity|score)[:\s]+([01](?:\.\d+)?)", vector_text, re.IGNORECASE)
     if match_dec:
         val = float(match_dec.group(1))
         return min(1.0, max(0.0, val))
