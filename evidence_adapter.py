@@ -17,6 +17,7 @@ with different variable names, this adapter:
 Nothing downstream ever needs to worry about input formats.
 """
 
+import json
 from typing import Any, Dict, List, Union
 
 
@@ -43,6 +44,23 @@ def to_plain_text(raw_evidence: Any) -> str:
 
     # Case 2: Dictionary
     if isinstance(raw_evidence, dict):
+        # Preserve every field from the structured Vector and Evidence agent
+        # payloads (including URLs, all relevance scores, metadata, and errors).
+        has_candidate_list = any(
+            isinstance(raw_evidence.get(key), list)
+            for key in ("diagnostic_candidates", "candidates", "predictions")
+        )
+        has_grouped_evidence = any(
+            key in raw_evidence
+            for key in ("hypothesis_results", "evidence_results", "evidence_by_hypothesis")
+        )
+        if (
+            has_candidate_list
+            or has_grouped_evidence
+            or ("hypothesis" in raw_evidence and "evidence" in raw_evidence)
+        ):
+            return json.dumps(raw_evidence, ensure_ascii=False, indent=2)
+
         # Specific handler for Symptom RAG / Vector Agent structured JSON schema
         if "diagnostic_candidates" in raw_evidence and isinstance(raw_evidence["diagnostic_candidates"], list):
             qc = raw_evidence.get("query_context", {})
@@ -128,6 +146,13 @@ def to_plain_text(raw_evidence: Any) -> str:
 
     # Case 3: List
     if isinstance(raw_evidence, list):
+        if any(
+            isinstance(item, dict)
+            and ("hypothesis" in item or "query" in item)
+            and any(key in item for key in ("evidence", "articles", "results"))
+            for item in raw_evidence
+        ):
+            return json.dumps(raw_evidence, ensure_ascii=False, indent=2)
         pieces = [to_plain_text(item) for item in raw_evidence]
         return "\n".join(f"- {p}" if not p.startswith("- ") else p for p in pieces if p)
 

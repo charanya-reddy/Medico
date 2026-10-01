@@ -2,15 +2,18 @@
 Unit test suite for the 4-Input Dual-Confidence Fusion & Optimizer CDSS Pipeline.
 """
 
+import json
 import unittest
 from evidence_adapter import to_plain_text, normalize_all
 from confidence_scoring import (
+    check_inter_stream_agreement,
     compute_confidence_score_1,
     compute_confidence_score_2,
+    extract_similarity_score,
+    score_web_evidence,
     fuse_dual_confidence,
     compute_dual_confidence,
     CONFIDENCE_THRESHOLD,
-    MAX_ITERATIONS,
 )
 from graph import build_pipeline
 
@@ -65,8 +68,45 @@ class TestEvidenceAdapter(unittest.TestCase):
         self.assertIn("Graph text", res["graph_evidence"])
         self.assertEqual(res["graph_web_evidence"], "FDA text")
 
+    def test_structured_agent_payloads_keep_all_fields(self):
+        vector = {
+            "status": "success",
+            "query_context": {"diseases": ["MI"], "tests": []},
+            "diagnostic_candidates": [{"condition": "Myocardial Infarction", "rank": 1}],
+            "evidence": [{"content": "finding", "url": "https://example.test", "relevance_score": 0.7}],
+            "metadata": {"evidence_count": 1},
+        }
+        web = {
+            "hypothesis_results": [{"hypothesis": "type 2 diabetes", "evidence": [{"url": "https://example.test"}]}],
+            "retrieval_warnings": ["HTTP 429; continuing"],
+        }
+        normalized = normalize_all(vector, web, "KG report", "")
+        self.assertEqual(json.loads(normalized["vector_evidence"]), vector)
+        self.assertEqual(json.loads(normalized["vector_web_evidence"]), web)
+
+    def test_list_of_grouped_evidence_remains_structured(self):
+        groups = [{
+            "query": "pulmonary embolism",
+            "articles": [{"title": "Clinical guideline", "url": "https://example.test"}],
+        }]
+        normalized = normalize_all("Vector result", groups, "Graph result", "")
+        self.assertEqual(json.loads(normalized["vector_web_evidence"]), groups)
+
 
 class TestConfidenceScoring(unittest.TestCase):
+    def test_missing_web_evidence_scores_zero(self):
+        self.assertEqual(score_web_evidence(""), 0.0)
+        self.assertEqual(score_web_evidence("No evidence provided."), 0.0)
+
+    def test_structured_vector_uses_actual_retrieval_score(self):
+        vector = json.dumps({"evidence": [{"relevance_score": 0.5996}], "diagnostic_candidates": []})
+        self.assertEqual(extract_similarity_score(vector), 0.5996)
+
+    def test_shared_medication_does_not_create_diagnostic_agreement(self):
+        vector = json.dumps({"diagnostic_candidates": [{"condition": "Pneumonia", "rank": 1}]})
+        graph = "Known disease: myocardial infarction. Current medication: Sildenafil."
+        self.assertEqual(check_inter_stream_agreement(vector, graph), (0.0, "Independent / Neutral"))
+
     def test_confidence_1_high(self):
         vec = "Community-acquired pneumonia (similarity 0.90)."
         web = "Clinical guideline: Amoxicillin recommended first-line for pneumonia."
@@ -80,6 +120,65 @@ class TestConfidenceScoring(unittest.TestCase):
         c1 = compute_confidence_score_1(vec, web)
         self.assertLess(c1["score"], CONFIDENCE_THRESHOLD)
         self.assertFalse(c1["passes_threshold"])
+
+    def test_unmatched_evidence_hypotheses_do_not_validate_primary_candidate(self):
+        vector = json.dumps({
+            "diagnostic_candidates": [{"condition": "Myocardial Infarction", "rank": 1}],
+            "evidence": [{"relevance_score": 0.7}],
+        })
+        web = json.dumps({
+            "hypothesis_results": [{
+                "hypothesis": "type 2 diabetes",
+                "evidence": [{"tier_label": "Systematic Review / Meta-Analysis"}],
+            }],
+            "retrieval_warnings": [],
+        })
+        c1 = compute_confidence_score_1(vector, web)
+        self.assertEqual(c1["web_evidence_score"], 0.0)
+        self.assertEqual(c1["evidence_hypothesis_check"]["matched_hypotheses"], [])
+        self.assertFalse(c1["passes_threshold"])
+
+    def test_equivalent_agent_schema_matches_dynamic_diagnosis(self):
+        vector = json.dumps({
+            "candidates": [{"disease": "Pulmonary Embolism", "position": 1}],
+            "evidence": [{"similarity_score": 0.82}],
+        })
+        web = json.dumps({
+            "hypothesis": "acute pulmonary embolism",
+            "evidence": [{"tier_label": "Clinical Guideline", "title": "Pulmonary embolism guideline"}],
+        })
+        c1 = compute_confidence_score_1(vector, web)
+        self.assertEqual(c1["evidence_hypothesis_check"]["primary_candidate"], "Pulmonary Embolism")
+        self.assertEqual(c1["evidence_hypothesis_check"]["matched_hypotheses"], ["acute pulmonary embolism"])
+        self.assertGreater(c1["web_evidence_score"], 0.0)
+        self.assertEqual(c1["similarity_score"], 0.82)
+
+    def test_grouped_hypothesis_results_schema_matches_candidate(self):
+        vector = json.dumps({
+            "diagnostic_candidates": [{"condition": "Myocardial Infarction (Heart Attack)", "rank": 1}],
+            "evidence": [{"relevance_score": 0.6}],
+        })
+        web = json.dumps({"hypothesis_results": [
+            {"hypothesis": "acute myocardial infarction", "evidence": [{"tier_label": "Systematic Review"}]},
+            {"hypothesis": "type 2 diabetes", "evidence": [{"tier_label": "Guideline"}]},
+        ]})
+        c1 = compute_confidence_score_1(vector, web)
+        checks = c1["evidence_hypothesis_check"]
+        self.assertEqual(checks["matched_hypotheses"], ["acute myocardial infarction"])
+        self.assertEqual(checks["unmatched_hypotheses"], ["type 2 diabetes"])
+        self.assertGreater(c1["web_evidence_score"], 0.0)
+
+    def test_evidence_results_alias_supports_different_disease(self):
+        vector = json.dumps({
+            "predictions": [{"diagnosis": "Asthma", "rank": 1}],
+            "evidence": [{"cosine_similarity": 0.76}],
+        })
+        web = json.dumps({"evidence_results": [
+            {"query": "Asthma", "articles": [{"type": "Clinical guideline"}]}
+        ]})
+        c1 = compute_confidence_score_1(vector, web)
+        self.assertEqual(c1["evidence_hypothesis_check"]["matched_hypotheses"], ["Asthma"])
+        self.assertEqual(c1["similarity_score"], 0.76)
 
     def test_confidence_2_always_passes(self):
         graph = "Knowledge graph traversal: Warfarin interaction with amoxicillin."

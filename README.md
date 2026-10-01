@@ -16,7 +16,7 @@ The 6 agents are:
 3. **Graph RAG Agent (Graph Agent)**: Queries structured biomedical knowledge graphs (e.g. SNOMED CT / ICD / UMLS relations) for comorbidities, drug-drug interactions, and clinical contraindications.
 4. **Evidence-Based Scanner Agent (Web Evidence Agent)**: Performs targeted literature searches (PubMed, Google Scholar, clinical guidelines like NICE/IDSA) for both the vector candidate diagnoses and the graph relations.
 5. **Clinical Data Fusion Agent (Our Agent #1)**: Integrates and cross-checks the 4 input evidence streams into a unified clinical report.
-6. **Adaptive Optimizer Agent (Our Agent #2)**: Evaluates diagnostic confidence and orchestrates the dynamic re-query feedback loop when confidence falls below the reliability threshold ($\tau = 0.65$).
+6. **Optimizer Agent (Our Agent #2)**: Reports the confidence scores and whether C1 meets the threshold ($\tau = 0.65$). The standalone pipeline runs once.
 
 ```
                       +-----------------------------+
@@ -39,20 +39,20 @@ The 6 agents are:
                                      | (4 Inputs)
                                      v
                       +-----------------------------+
-                      | Clinical Data Fusion Agent  |<-------+
-                      +--------------+--------------+        |
-                                     |                       |
-                                     v                       | (Re-query Loop
-                      +-----------------------------+        |  if C1 < 0.65
-                      | Dual Confidence Calculation |        |  up to 3 times)
-                      +--------------+--------------+        |
-                                     |                       |
-                                     v                       |
-                      +-----------------------------+        |
-                      |  Adaptive Optimizer Agent   |--------+
+                      | Clinical Data Fusion Agent  |
                       +--------------+--------------+
                                      |
-                                     | (if C1 >= 0.65 or max 3 attempts)
+                                     v
+                      +-----------------------------+
+                      | Dual Confidence Calculation |
+                      +--------------+--------------+
+                                     |
+                                     v
+                      +-----------------------------+
+                      |  Adaptive Optimizer Agent   |
+                      +--------------+--------------+
+                                     |
+                                     | (standalone run ends here)
                                      v
                                    [END]
 ```
@@ -104,16 +104,14 @@ $$C_{\text{final}} = \text{clamp}\Big(\beta_{\text{vec}} \cdot C_1 + \beta_{\tex
 
 ---
 
-## 4. The Gating Decision Rule in the Optimizer Agent
+## 4. Threshold Status in the Optimizer Agent
 
-The Optimizer Agent enforces the following decision logic:
+The Optimizer reports threshold status after one pass:
 - **Condition Evaluated**: **Confidence Score 1 ($C_1$) ONLY**.
 - As per project requirements:
-  - If $C_1 \ge \tau$ ($\tau = 0.65$): The diagnosis is accepted. The Optimizer emits a `FINAL:` clinical sign-off, and LangGraph routes to `END`.
-  - If $C_1 < \tau$:
-    - If `attempt < MAX_ITERATIONS` ($3$): The Optimizer emits a `RE-QUERY:` guidance plan with targeted search recommendations, term boosting, and query reformulation directives. LangGraph increments the attempt counter and loops back to the Fusion Agent.
-    - If `attempt >= MAX_ITERATIONS`: The pipeline halts and outputs the best available synthesis report with an audit notice.
-  - **Confidence Score 2 ($C_2$) is NOT gating**: Knowledge Graph relations and their supporting literature are structured and inherently high-confidence; therefore, they do not trigger re-queries.
+  - If $C_1 \ge \tau$ ($\tau = 0.65$): The Optimizer reports that the score meets the threshold.
+  - If $C_1 < \tau$: The Optimizer reports that the score is below the threshold.
+  - **Confidence Score 2 ($C_2$) is informational** and is still included in the fused score.
 
 ---
 
@@ -124,8 +122,8 @@ The Optimizer Agent enforces the following decision logic:
 ├── evidence_adapter.py    # Adapter layer: converts ANY shape (str, dict, list) from upstream into clean text
 ├── confidence_scoring.py  # Pure math: computes C1, C2, and dual-stream evidential fusion
 ├── agents.py              # LLM agents: Fusion Agent synthesis and Optimizer Agent feedback & fallbacks
-├── graph.py               # LangGraph wiring: 2 nodes (fusion + optimizer), state definition, conditional router
-├── run.py                 # Main execution script with test cases
+├── graph.py               # LangGraph wiring: 2 nodes (fusion + optimizer), state definition
+├── run.py                 # Main single-pass execution script
 ├── test_pipeline.py       # Unit test suite covering adapter, confidence scoring, and graph
 ├── requirements.txt       # Dependencies with pinned versions
 ├── example_input.json     # Example 4-stream input for the pipeline
@@ -143,25 +141,27 @@ The Optimizer Agent enforces the following decision logic:
 pip install -r requirements.txt
 ```
 
-### Configure API Key (Optional for fallback testing):
+### Configure API Key:
 Copy `.env.example` to `.env` and insert your OpenRouter API key:
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
-*(Note: If no API key is provided, built-in deterministic fallbacks run automatically, ensuring zero crashes).*
+If `OPENROUTER_API_KEY` is missing, startup prints a message. The pipeline output includes a `fallback_used` boolean. If the fusion call fails, the report says `AI report unavailable` and includes only supplied input data; if the optimizer call fails, its response is `AI report unavailable`.
 
 ### Run the Standard Pipeline:
 ```bash
 python run.py
 ```
 
-### Run the Low-Confidence Re-Query Loop Demo:
-To see the Adaptive Optimizer feedback loop in action (retrying up to 3 times):
+### Run with Low-Confidence Sample Data:
+This single pass displays the optimizer's threshold status.
 ```bash
-python run.py --test-loop
+python run.py --low-confidence
 ```
 
 ### Run the Unit Test Suite:
 ```bash
 python test_pipeline.py
 ```
+
+`safety.py` was removed because it was not connected to the pipeline and inferred treatment and safety statements. Safety findings should come from the actual evidence inputs.

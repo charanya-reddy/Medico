@@ -12,10 +12,8 @@ This allows:
 Architecture:
   - Node 1: `fusion_node`    -> Adapts 4 inputs, computes 3 confidence scores (pure Python),
                                 generates synthesized clinical report (LLM/fallback).
-  - Node 2: `optimizer_node` -> Checks Confidence Score 1, generates final or re-query
-                                response (LLM/fallback), increments attempt counter.
-  - Edge Router: `optimizer_router` -> Gates strictly on Confidence Score 1 (< 0.65 retries,
-                                       >= 0.65 stops at END).
+  - Node 2: `optimizer_node` -> Reports threshold status (LLM/fallback).
+  - The standalone graph runs once from fusion_node to optimizer_node and then ends.
 """
 
 import sys
@@ -23,7 +21,7 @@ from typing import TypedDict, Any, Dict
 from langgraph.graph import StateGraph, END
 
 from evidence_adapter import extract_from_state
-from confidence_scoring import compute_dual_confidence, MAX_ITERATIONS, CONFIDENCE_THRESHOLD
+from confidence_scoring import compute_dual_confidence
 from agents import (
     run_fusion_agent,
     run_optimizer_agent,
@@ -64,6 +62,7 @@ class PipelineState(TypedDict, total=False):
     confidence: Dict[str, Any]
     optimizer_response: str
     attempt: int
+    fallback_used: bool
 
 
 # ============================================================================
@@ -94,6 +93,7 @@ def fusion_node(state: PipelineState) -> Dict[str, Any]:
     )
 
     # Step 3: LLM multi-source synthesis report (with error logging fallback)
+    fallback_used = False
     try:
         report = run_fusion_agent(
             vector_evidence=vec,
@@ -104,11 +104,13 @@ def fusion_node(state: PipelineState) -> Dict[str, Any]:
     except Exception as error:
         sys.stderr.write(f"[LLM WARNING / ERROR] Fusion Agent AI call failed ({error}). Using deterministic fallback synthesis.\n")
         report = build_fallback_report(vec, vec_web, graph, graph_web)
+        fallback_used = True
 
     return {
         **normalized,
         "fusion_report": report,
         "confidence": confidence,
+        "fallback_used": fallback_used,
     }
 
 
@@ -122,8 +124,8 @@ def optimizer_node(state: PipelineState) -> Dict[str, Any]:
     Steps:
       1. Reads the confidence dictionary (specifically evaluates Confidence Score 1).
       2. If C1 >= 0.65: Generates FINAL acceptance confirmation.
-         If C1 < 0.65:  Generates RE-QUERY feedback with specific term boosting & query guidance.
-      3. Increments the iteration counter (attempt).
+         If C1 < 0.65:  Reports that the result is below the threshold.
+      3. Preserves the attempt state value for integration compatibility.
     """
     attempt = state.get("attempt", 1)
     confidence = state["confidence"]
@@ -131,33 +133,17 @@ def optimizer_node(state: PipelineState) -> Dict[str, Any]:
 
     try:
         response = run_optimizer_agent(fusion_report, confidence)
+        fallback_used = state.get("fallback_used", False)
     except Exception as error:
         sys.stderr.write(f"[LLM WARNING / ERROR] Optimizer Agent AI call failed ({error}). Using deterministic fallback response.\n")
         response = build_fallback_optimizer(confidence, attempt)
+        fallback_used = True
 
     return {
         "optimizer_response": response,
-        "attempt": attempt + 1,
+        "attempt": attempt,
+        "fallback_used": fallback_used,
     }
-
-
-# ============================================================================
-# CONDITIONAL EDGE ROUTER (FOR INTEGRATION WITH MASTER PIPELINE)
-# ============================================================================
-def optimizer_router(state: PipelineState) -> str:
-    """
-    Conditional routing helper for master LangGraph controller:
-      - Evaluates Confidence Score 1 (Vector track threshold tau = 0.65).
-      - Returns "stop" if C1 >= 0.65 or max iterations reached.
-      - Returns "retry" if C1 < 0.65 (so master LangGraph can route back to Vector RAG).
-    """
-    c1_passed = state["confidence"]["confidence_1"]["passes_threshold"]
-    current_attempt = state.get("attempt", 1)
-
-    if c1_passed or current_attempt > MAX_ITERATIONS:
-        return "stop"
-
-    return "retry"
 
 
 # ============================================================================
@@ -174,7 +160,7 @@ def build_pipeline():
     graph.add_node("fusion_node", fusion_node)
     graph.add_node("optimizer_node", optimizer_node)
 
-    # 2. Connect the nodes cleanly to END (no internal loop)
+    # Connect the nodes in one pass and end.
     graph.set_entry_point("fusion_node")
     graph.add_edge("fusion_node", "optimizer_node")
     graph.add_edge("optimizer_node", END)

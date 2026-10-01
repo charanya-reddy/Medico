@@ -8,10 +8,10 @@ formulas -- NOT by asking an AI to guess numbers.
 The 4-Input, Dual-Stream Confidence Architecture:
   - Stream 1 (Vector Track): Vector Agent Output + Evidence Agent Output on Vector
       -> Produces Confidence Score 1 (C1)
-      -> Used as the GATING CRITERIA for the Optimizer loop (threshold = 0.65).
+      -> Compared with the acceptance threshold (0.65) for reporting.
   - Stream 2 (Graph Track): Graph Agent Output + Evidence Agent Output on Graph
       -> Produces Confidence Score 2 (C2)
-      -> Structured knowledge graph fidelity; always high and non-gating.
+      -> Reports structured graph fidelity and its supplied literature support.
   - Fusion of C1 and C2:
       -> Produces Final Fused Confidence (C_final) using our recommended
          Dual-Stream Evidential Fusion Formula.
@@ -19,13 +19,13 @@ The 4-Input, Dual-Stream Confidence Architecture:
 NOTHING in this file calls an LLM or touches the internet. It is pure, auditable Python.
 """
 
+import json
 import re
 from typing import Dict, Any, Tuple
 
 
 # --- THRESHOLDS & HYPERPARAMETERS (Aligned with Base Paper Table 2) ---
 CONFIDENCE_THRESHOLD = 0.65  # Base paper acceptance threshold (tau = 0.65)
-MAX_ITERATIONS = 3           # Base paper maximum optimization cycles
 
 # --- STREAM 1 WEIGHTS (Vector RAG + Literature on Vector) ---
 WEIGHT_VEC_SIMILARITY = 0.45    # BioBERT cosine similarity match
@@ -60,6 +60,27 @@ def extract_similarity_score(vector_text: str) -> float:
          Derives an objective clinical retrieval quality score (0.0 to 1.0) by analyzing
          semantic completeness, symptoms, mapped terms, and disease specificity.
     """
+    # Structured Vector Agent payloads wrap keys in JSON quotes, so parse the
+    # actual retrieval field before falling back to text patterns.
+    payload = _load_payload(vector_text)
+    def find_retrieval_scores(value: Any):
+        if isinstance(value, dict):
+            for key in ("relevance_score", "similarity_score", "cosine_similarity", "vector_similarity"):
+                score = value.get(key)
+                if isinstance(score, (int, float)):
+                    yield float(score)
+            for nested in value.values():
+                yield from find_retrieval_scores(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from find_retrieval_scores(nested)
+
+    scores = list(find_retrieval_scores(payload))
+    if scores:
+        # Vector retrieval results are normally sorted best-first. Taking the
+        # strongest supplied score also handles equivalent unsorted schemas.
+        return min(1.0, max(0.0, max(scores)))
+
     # Case 1: Explicit RAG similarity or relevance score provided (e.g. relevance_score: 0.5996 or similarity: 0.88)
     match_dec = re.search(r"(?:relevance_score|similarity_score|cosine_similarity|relevance|similarity|score)[:\s]+([01](?:\.\d+)?)", vector_text, re.IGNORECASE)
     if match_dec:
@@ -136,7 +157,10 @@ def score_web_evidence(web_evidence_text: str) -> float:
       - 0.50: Case Reports, Case Studies, Anecdotal series
       - 0.60: General or unspecified biomedical publications
     """
-    text = web_evidence_text.lower()
+    text = (web_evidence_text or "").strip().lower()
+    # Missing retrieval is missing evidence, not a generic publication.
+    if not text or text == "no evidence provided." or text == "no evidence provided":
+        return 0.0
 
     # Check weakest first to prevent substring false matches (e.g. 'case study' matching 'study')
     if any(phrase in text for phrase in ["case report", "case study", "anecdotal"]):
@@ -156,6 +180,105 @@ def extract_key_terms(text: str) -> set:
     }
     words = set(re.findall(r"[a-z]{4,}", text.lower()))
     return words - stopwords
+
+
+def _load_payload(text: str) -> Any:
+    """Parse normalized JSON text, returning None for ordinary prose."""
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _condition_from_record(record: Dict[str, Any]) -> str:
+    """Read a disease label from common Vector Agent field names."""
+    for key in ("condition", "condition_name", "disease", "disease_name", "diagnosis", "name", "label"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _ranked_candidates(payload: Any) -> list:
+    """Return candidate records in rank order across common payload layouts."""
+    if isinstance(payload, list):
+        records = [item for item in payload if isinstance(item, dict) and _condition_from_record(item)]
+    elif isinstance(payload, dict):
+        records = []
+        for key in ("diagnostic_candidates", "candidates", "predictions", "diseases", "diagnoses"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                records.extend(item for item in value if isinstance(item, dict) and _condition_from_record(item))
+        if not records:
+            direct = _condition_from_record(payload)
+            if direct:
+                records = [payload]
+    else:
+        records = []
+
+    def rank_value(record: Dict[str, Any]) -> float:
+        for key in ("rank", "position", "index"):
+            try:
+                return float(record[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return float("inf")
+
+    return sorted(records, key=rank_value)
+
+
+def _hypothesis_records(payload: Any) -> list:
+    """Extract labeled evidence groups from common Evidence Agent schemas."""
+    found = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+
+        label = next((value.get(key) for key in ("hypothesis", "query", "search_term", "condition", "disease")
+                      if isinstance(value.get(key), str) and value.get(key).strip()), None)
+        evidence = next((value.get(key) for key in ("evidence", "articles", "papers", "results", "items")
+                         if isinstance(value.get(key), list)), None)
+        if label and evidence is not None:
+            found.append({"hypothesis": label.strip(), "record": value})
+            return
+
+        for key in ("hypothesis_results", "evidence_results", "results", "hypotheses", "queries"):
+            nested = value.get(key)
+            if isinstance(nested, (list, dict)):
+                visit(nested)
+
+    visit(payload)
+    return found
+
+
+def _normalized_label(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _label_terms(text: str) -> set:
+    qualifiers = {"acute", "chronic", "mild", "moderate", "severe", "recurrent", "unspecified", "suspected"}
+    return extract_key_terms(_normalized_label(text)) - qualifiers
+
+
+def _labels_match(candidate: str, hypothesis: str) -> bool:
+    """Conservative lexical match; never infer a medical synonym."""
+    primary = _normalized_label(candidate)
+    evidence = _normalized_label(hypothesis)
+    if not primary or not evidence:
+        return False
+    if primary == evidence or f" {evidence} " in f" {primary} " or f" {primary} " in f" {evidence} ":
+        return True
+
+    primary_terms = _label_terms(primary)
+    evidence_terms = _label_terms(evidence)
+    shared = primary_terms & evidence_terms
+    shortest = min(len(primary_terms), len(evidence_terms))
+    return bool(shortest and len(shared) >= 2 and len(shared) / shortest >= 0.75)
 
 
 def score_concordance_pairwise(primary_text: str, evidence_text: str) -> float:
@@ -186,7 +309,6 @@ def check_inter_stream_agreement(vector_text: str, graph_text: str) -> Tuple[flo
       - Looks for mutual alignment/compatibility between diagnosis and graph entities (+0.05)
       - Returns (adjustment_factor, status_label)
     """
-    v_lower = vector_text.lower()
     g_lower = graph_text.lower()
 
     conflict_keywords = ["contraindicat", "severe interaction", "incompatible", "unresolved conflict"]
@@ -196,11 +318,18 @@ def check_inter_stream_agreement(vector_text: str, graph_text: str) -> Tuple[flo
         # Check if vector text acknowledges or resolves it
         return -AGREEMENT_BONUS, "Conflict/Contraindication Detected"
 
-    # Check shared disease/symptom concepts between vector and graph
-    v_terms = extract_key_terms(v_lower)
-    g_terms = extract_key_terms(g_lower)
-    if len(v_terms & g_terms) >= 1:
-        return AGREEMENT_BONUS, "Mutually Concordant"
+    # Award a bonus only when the rank-1 Vector diagnosis is explicitly
+    # grounded in the graph text. Shared symptoms or medication names alone
+    # do not establish diagnostic agreement.
+    vector_payload = _load_payload(vector_text)
+    ranked = _ranked_candidates(vector_payload)
+    primary_candidate = _condition_from_record(ranked[0]) if ranked else None
+
+    if primary_candidate:
+        candidate_terms = extract_key_terms(primary_candidate)
+        graph_terms = extract_key_terms(g_lower)
+        if _labels_match(primary_candidate, g_lower) or len(candidate_terms & graph_terms) >= 2:
+            return AGREEMENT_BONUS, "Mutually Concordant"
 
     return 0.0, "Independent / Neutral"
 
@@ -217,11 +346,45 @@ def compute_confidence_score_1(vector_evidence: str, vector_web_evidence: str) -
     Formula:
       C1 = (w_sim * S_vec) + (w_web * E_web_vec) + (w_conc * Conc_vec)
 
-    This is the gating confidence score evaluated by the Adaptive Optimizer.
+    This score is compared with the configured threshold by the Optimizer.
     """
     sim_score = extract_similarity_score(vector_evidence)
-    web_score = score_web_evidence(vector_web_evidence)
-    concordance = score_concordance_pairwise(vector_evidence, vector_web_evidence)
+
+    vector_payload = _load_payload(vector_evidence)
+    ranked_candidates = _ranked_candidates(vector_payload)
+    primary_candidate = _condition_from_record(ranked_candidates[0]) if ranked_candidates else None
+
+    web_payload = _load_payload(vector_web_evidence)
+    grouped_evidence = _hypothesis_records(web_payload)
+    evidence_hypotheses = [group["hypothesis"] for group in grouped_evidence]
+    matched_groups = [
+        group for group in grouped_evidence
+        if primary_candidate and _labels_match(primary_candidate, group["hypothesis"])
+    ]
+    matched_hypotheses = list(dict.fromkeys(group["hypothesis"] for group in matched_groups))
+
+    if grouped_evidence and primary_candidate:
+        # Only evidence grouped under a matching hypothesis can contribute to
+        # the primary candidate's C1 literature and concordance terms.
+        if matched_groups:
+            matched_texts = [json.dumps(group["record"], ensure_ascii=False) for group in matched_groups]
+            web_scores = [score_web_evidence(text) for text in matched_texts]
+            web_score = max(web_scores, default=0.0)
+            concordance = score_concordance_pairwise(primary_candidate, "\n".join(matched_texts))
+        else:
+            web_score = 0.0
+            concordance = 0.40
+    elif web_payload is not None and isinstance(web_payload, dict) and any(
+        isinstance(web_payload.get(key), list) for key in ("hypothesis_results", "evidence", "results", "articles")
+    ):
+        # Structured but unlabeled literature cannot safely be assigned to a
+        # diagnosis, so retain it for reporting but do not award C1 support.
+        web_score = 0.0
+        concordance = 0.40
+    else:
+        # Backwards-compatible handling for plain prose evidence inputs.
+        web_score = score_web_evidence(vector_web_evidence)
+        concordance = score_concordance_pairwise(primary_candidate or vector_evidence, vector_web_evidence)
 
     raw_c1 = (
         WEIGHT_VEC_SIMILARITY * sim_score +
@@ -237,6 +400,15 @@ def compute_confidence_score_1(vector_evidence: str, vector_web_evidence: str) -
         "concordance_score": concordance,
         "passes_threshold": c1 >= CONFIDENCE_THRESHOLD,
         "threshold": CONFIDENCE_THRESHOLD,
+        "evidence_hypothesis_check": {
+            "primary_candidate": primary_candidate,
+            "evidence_hypotheses": evidence_hypotheses,
+            "matched_hypotheses": matched_hypotheses,
+            "unmatched_hypotheses": [
+                hypothesis for hypothesis in evidence_hypotheses
+                if hypothesis not in matched_hypotheses
+            ],
+        },
     }
 
 
@@ -248,12 +420,15 @@ def compute_confidence_score_2(graph_evidence: str, graph_web_evidence: str) -> 
     Formula:
       C2 = (w_graph * S_graph) + (w_web * E_web_graph) + (w_conc * Conc_graph)
 
-    Because Knowledge Graph triples provide structured ground truth and are verified
-    by literature, C2 is consistently high and is not checked for re-querying.
+    C2 reports graph grounding and its supplied literature evidence independently.
     """
     graph_score = extract_graph_score(graph_evidence)
     web_score = score_web_evidence(graph_web_evidence)
-    concordance = score_concordance_pairwise(graph_evidence, graph_web_evidence)
+    concordance = (
+        score_concordance_pairwise(graph_evidence, graph_web_evidence)
+        if web_score > 0.0
+        else 0.40
+    )
 
     raw_c2 = (
         WEIGHT_GRAPH_STRUCTURAL * graph_score +
@@ -323,7 +498,7 @@ def compute_dual_confidence(
     MASTER FUNCTION. Runs both stream computations and fuses them.
 
     Returns full diagnostic breakdown dictionary:
-      - confidence_1: Vector stream results (used for re-query gating)
+      - confidence_1: Vector stream results (reported against the threshold)
       - confidence_2: Graph stream results (non-gating)
       - fusion: Details of the fused score
       - final_score: The overall fused confidence
@@ -333,7 +508,7 @@ def compute_dual_confidence(
     c2_dict = compute_confidence_score_2(graph_evidence, graph_web_evidence)
     fusion_dict = fuse_dual_confidence(c1_dict, c2_dict, vector_evidence, graph_evidence)
 
-    # CRITICAL: Gating is based STRICTLY on Confidence Score 1 as requested!
+    # Threshold status is based on Confidence Score 1; C2 remains informational.
     passes_gate = c1_dict["passes_threshold"]
 
     return {
