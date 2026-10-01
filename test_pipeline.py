@@ -4,6 +4,7 @@ Unit test suite for the 4-Input Dual-Confidence Fusion & Optimizer CDSS Pipeline
 
 import json
 import unittest
+from unittest.mock import patch
 from evidence_adapter import to_plain_text, normalize_all
 from confidence_scoring import (
     check_inter_stream_agreement,
@@ -15,7 +16,7 @@ from confidence_scoring import (
     compute_dual_confidence,
     CONFIDENCE_THRESHOLD,
 )
-from graph import build_pipeline
+from graph import build_pipeline, fusion_node
 
 
 class TestEvidenceAdapter(unittest.TestCase):
@@ -215,6 +216,29 @@ class TestLangGraphPipeline(unittest.TestCase):
     def test_pipeline_build(self):
         pipeline = build_pipeline()
         self.assertIsNotNone(pipeline)
+
+    def test_flat_kg_safety_messages_appear_verbatim_in_fusion_report(self):
+        message = "Sildenafil is recorded as contraindicated in myocardial infarction"
+        safety_messages = [{
+            "type": "contraindication",
+            "drug": "sildenafil",
+            "target": "myocardial infarction",
+            "severity": "major",
+            "message": message,
+        }]
+        state = {
+            "raw_vector_evidence": {"diagnostic_candidates": [{"condition": "Myocardial Infarction", "rank": 1}]},
+            "raw_vector_web_evidence": "",
+            "raw_graph_evidence": "Known disease: myocardial infarction",
+            "raw_graph_web_evidence": "",
+            "kg_safety_messages": safety_messages,
+        }
+        with patch("graph.run_fusion_agent", return_value="LLM synthesis"):
+            result = fusion_node(state)
+
+        self.assertIn(message, result["fusion_report"])
+        self.assertIn('"severity": "major"', result["fusion_report"])
+        self.assertIn('"type": "contraindication"', result["fusion_report"])
 
 
 if __name__ == "__main__":

@@ -16,13 +16,14 @@ Architecture:
   - The standalone graph runs once from fusion_node to optimizer_node and then ends.
 """
 
+import json
 import sys
 from typing import TypedDict, Any, Dict
 from langgraph.graph import StateGraph, END
 
 from evidence_adapter import extract_from_state
 from confidence_scoring import compute_dual_confidence
-from agents import (
+from fusion_agents import (
     run_fusion_agent,
     run_optimizer_agent,
     build_fallback_report,
@@ -50,6 +51,9 @@ class PipelineState(TypedDict, total=False):
     graph_output: Any
     graph_evidence: Any
     graph_rag: Any
+
+    # Additional structured safety items emitted by the KG wrapper
+    kg_safety_messages: Any
 
     raw_graph_web_evidence: Any
     evidence_on_graph: Any
@@ -79,6 +83,13 @@ def fusion_node(state: PipelineState) -> Dict[str, Any]:
     """
     # Step 1: Normalize whatever keys are in state into clean plain strings
     normalized = extract_from_state(state)
+    kg_safety_messages = state.get("kg_safety_messages")
+    safety_json = ""
+    if kg_safety_messages:
+        safety_json = json.dumps(kg_safety_messages, ensure_ascii=False, indent=2)
+        normalized["graph_evidence"] = (
+            f"{normalized['graph_evidence']}\n\nKG SAFETY MESSAGES:\n{safety_json}"
+        )
     vec = normalized["vector_evidence"]
     vec_web = normalized["vector_web_evidence"]
     graph = normalized["graph_evidence"]
@@ -105,6 +116,11 @@ def fusion_node(state: PipelineState) -> Dict[str, Any]:
         sys.stderr.write(f"[LLM WARNING / ERROR] Fusion Agent AI call failed ({error}). Using deterministic fallback synthesis.\n")
         report = build_fallback_report(vec, vec_web, graph, graph_web)
         fallback_used = True
+
+    # Keep structured KG warnings visible verbatim even if report synthesis
+    # paraphrases them or omits one of the requested fields.
+    if safety_json and safety_json not in report:
+        report = f"{report}\n\nKNOWLEDGE GRAPH SAFETY MESSAGES (verbatim):\n{safety_json}"
 
     return {
         **normalized,

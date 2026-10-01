@@ -1,5 +1,5 @@
 """
-FILE 3 of 5: agents.py
+FILE 3 of 5: fusion_agents.py
 
 WHAT THIS FILE DOES:
 Executes the two LLM-driven agents in the pipeline:
@@ -31,7 +31,7 @@ if not os.getenv("OPENROUTER_API_KEY"):
 
 # Shared model connection configured for OpenRouter / OpenAI
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
+    model=os.getenv("OPENROUTER_MODEL") or "gpt-4o-mini",
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY", "dummy_key_if_offline"),
 )
@@ -71,6 +71,8 @@ Synthesize the following 4 input evidence streams into a CONCISE, ENDPOINT-STYLE
 - Do not add drug safety claims that are absent from the Knowledge Graph inputs.
 - Do not introduce treatment drugs that are absent from the evidence inputs. Keep Knowledge Graph treatments labeled as options for a doctor, not prescriptions.
 - Preserve each Vector and Evidence Agent hypothesis label. Evidence returned for another hypothesis must not be presented as support for the primary diagnosis.
+- Preserve every item in the supplied `kg_safety_messages` list. Include its type, drug, target, severity, and message exactly as supplied; do not infer or change severity.
+- Interpret safety types as supplied: `contraindication.target` is a disease; `drug_clash.target` is another current medicine; `treatment_clash.target` is the current medicine it clashes with; `treatment_clash_summary` is a grouped summary for one disease and must not be split into invented individual clashes.
 - Treat retrieval-source failures as evidence limitations, not clinical findings. Similarity or retrieval scores are search signals, not diagnostic probabilities.
 - Do NOT prescribe exact drug dosages (e.g. do NOT write "aspirin 325 mg"). List general pharmacotherapy options for a clinician to consider.
 - Keep every section extremely concise using short bullet points (endpoints).

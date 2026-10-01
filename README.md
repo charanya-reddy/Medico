@@ -121,14 +121,13 @@ The Optimizer reports threshold status after one pass:
 .
 ├── evidence_adapter.py    # Adapter layer: converts ANY shape (str, dict, list) from upstream into clean text
 ├── confidence_scoring.py  # Pure math: computes C1, C2, and dual-stream evidential fusion
-├── agents.py              # LLM agents: Fusion Agent synthesis and Optimizer Agent feedback & fallbacks
+├── fusion_agents.py       # LLM agents: Fusion Agent synthesis and Optimizer Agent feedback & fallbacks
 ├── graph.py               # LangGraph wiring: 2 nodes (fusion + optimizer), state definition
 ├── run.py                 # Main single-pass execution script
 ├── test_pipeline.py       # Unit test suite covering adapter, confidence scoring, and graph
 ├── requirements.txt       # Dependencies with pinned versions
 ├── example_input.json     # Example 4-stream input for the pipeline
 ├── example_output.json    # Example pipeline output (confidence + report + optimizer response)
-├── .env.example           # Environment template for OPENROUTER_API_KEY
 └── .gitignore
 ```
 
@@ -142,11 +141,14 @@ pip install -r requirements.txt
 ```
 
 ### Configure API Key:
-Copy `.env.example` to `.env` and insert your OpenRouter API key:
+Create a `.env` file in the project root and add your OpenRouter API key and optional model:
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=your-preferred-openrouter-model
 ```
-If `OPENROUTER_API_KEY` is missing, startup prints a message. The pipeline output includes a `fallback_used` boolean. If the fusion call fails, the report says `AI report unavailable` and includes only supplied input data; if the optimizer call fails, its response is `AI report unavailable`.
+`OPENROUTER_API_KEY` is required for LLM-generated reports. `OPENROUTER_MODEL` is optional and defaults to `gpt-4o-mini`; set it to a model available to your key. If the API key is missing or an LLM call fails, startup reports the missing key and the pipeline uses its fallback. The output includes a `fallback_used` boolean.
+
+The KG wrapper may pass `kg_safety_messages` as a list of objects with `type`, `drug`, `target`, `severity`, and `message`. Fusion includes these items with their supplied severity and message in the report.
 
 ### Run the Standard Pipeline:
 ```bash
