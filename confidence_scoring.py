@@ -144,8 +144,8 @@ def extract_graph_score(graph_text: str) -> float:
     if match:
         val = float(match.group(1))
         return min(1.0, max(0.0, val))
-    # Standard baseline for verified KG relations
-    return 0.90
+    # Missing graph quality metadata is unknown, not high confidence.
+    return 0.0
 
 
 def score_web_evidence(web_evidence_text: str) -> float:
